@@ -1,0 +1,779 @@
+---
+title: "Salarios"
+author: "Andres Rodriguez"
+date: "2023-06-28"
+output:
+  html_document: 
+    fig_width: 10
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+if (!require('psych')) install.packages('psych')
+if (!require('printr')) install.packages('printr')
+if(!require('ggplot2')) install.packages('ggplo2')
+if(!require('patchwork')) install.packages('patchwork')
+if(!require('gmodels')) install.packages('gmodels')
+if(!require('scales')) install.packages('scales')
+if(!require('wordcloud2')) install.packages('wordcloud2')
+if(!require('gridExtra')) install.packages('gridExtra')
+if(!require('grid')) install.packages('grid')
+if(!require('GGally')) install.packages('GGally')
+if(!require('scatterplot3d')) install.packages('scatterplot3d')
+if(!require('lmtest')) install.packages('lmtest')
+if(!require('fastDummies')) install.packages('fastDummies')
+if(!require('e1071')) install.packages('e1071')
+if(!require('rpart')) install.packages('rpart')
+if(!require('rpart.plot')) install.packages('rpart.plot')
+if(!require('randomForest')) install.packages('randomForest')
+```
+
+El objetivo de este notebook es buscar predecir el salario de una persona en función de ciertas características, como su edad, nivel de escolaridad etc. Lo anterior a través de la experimentación con técnicas de Machine Learning.
+
+Los datos utilizados son de origen en [Kaggle](https://www.kaggle.com/datasets/mohithsairamreddy/salary-data?select=Salary_Data.csv) bajo licencia *Community Data License Agreement -- Sharing, Version 1.0*
+
+# Exploracion de datos
+
+## Recoleccion y exploracion inicial de datos
+
+Se inicia el proceso con la carga de los datos,
+
+```{r carga_datos, cache = TRUE}
+salario <- read.csv("Data/Salary_Data.csv", dec = ".") 
+head(salario)
+str(salario)
+```
+
+El dataset cuenta con 6.704 registros y 6 variables, producto de la recolección a través de encuestas, ofertas de empleo y otras fuentes publicas según especifica el autor.
+
+La distribución de variables esta dada:
+
+| Variable            | Tipo     | Descripción                               |
+|:--------------------|:---------|:------------------------------------------|
+| Age                 | Discreta | Edad del empleado                         |
+| Gender              | Nominal  | Genero del empleado                       |
+| Education Level     | Nominal  | Nivel de escolaridad del empleado         |
+| Job title           | Nominal  | Cargo del empleado                        |
+| Years of experience | Continua | Años de experiencia del empleado          |
+| Salary              | Discreta | Salario del empleado (*valor a predecir*) |
+
+### *Exploración univaridada (Cuantitativas)*
+
+Se verifican estadísticos iniciales para las variables cuantitativas donde se encuentra:
+
+1.  ***Edad***: una media de edad de `r round(mean(salario$Age, na.rm = T), 2)` y con empleados que van desde los 21 hasta los 62 años de edad; adicionalmente se observan 2 datos faltantes.
+2.  ***Años de experiencia***: Empleados con experiencia entre 0 y 34 años, sin embargo el 75% de los mismos tienen `r quantile(salario$Years.of.Experience, type = 1, na.rm = T)[4]` o menos años de experiencia; adicionalmente se observan 3 datos faltantes.
+3.  ***Salario***: Con una media de `$ 115.327` Mensuales, el valor mínimo da una primera impresión de ser un error de recolección, sin embargo se realizara un análisis detallado de los valores atípicos en una siguiente instancia.
+
+```{r cache = TRUE}
+summary(salario[,c(1, 5, 6)])
+describe(salario[, c(1, 5, 6)])
+```
+
+En cuanto a la forma de las variables, se observa un valor positivo de asimetria en las variables `Age` y `Years of experience` lo que podría indicar una mayor concentración de valores en la parte inicial de las distribuciones -personas jovenes con baja experiencia, lo que es coherente con la realidad-, así como un valor negativo de curtosis que indica una concentración de datos de manera aplanada (ausencia de pico).
+
+Se reemplazan los datos faltantes por su media y se ajusta el tipo de cada variable (Gender & Education level -\> Factor)
+
+```{r echo=F, cache = TRUE}
+salario$Age = ifelse(is.na(salario$Age),
+                     ave(salario$Age, FUN = function(x) mean(x, na.rm = TRUE)),
+                     salario$Age)
+
+salario$Years.of.Experience = ifelse(is.na(salario$Years.of.Experience),
+                     ave(salario$Years.of.Experience, FUN = function(x) mean(x, na.rm = TRUE)),
+                     salario$Years.of.Experience)
+
+salario$Salary = ifelse(is.na(salario$Salary),
+                     ave(salario$Salary, FUN = function(x) mean(x, na.rm = TRUE)),
+                     salario$Salary)
+
+salario[, c(2, 3, 4)] <- lapply(salario[,c(2, 3, 4)], FUN = as.factor)
+
+```
+
+Se visualiza la distribución de las variables cuantitativas, donde se puede apreciar los concepto mencionados anteriormente sobre el comportamiento de cada variable.
+
+Respecto al salario, se observa una gran concentración cuasiunifrome de datos entre \$50.000 y \$200.000.
+
+```{r, echo = F, fig.height=15, fig.width=10, cache=TRUE}
+p1 <- ggplot(salario, aes(x = Age)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 40, fill = 'red', alpha = 0.25) +
+  geom_density(col = 'red') +
+  ggtitle("Distribucion de edad de los empleados") +
+  labs(x = 'Edad', y = 'Densidad') + 
+  theme(plot.title = element_text(size = 11, face = 'bold')) +
+  theme(axis.title = element_text(size = 10))
+  
+p2 <- ggplot(salario, aes(x = Years.of.Experience)) +
+  geom_histogram(aes(y= after_stat(density)), bins = 25 ,fill = 'blue', alpha = 0.25) +
+  geom_density(col = 'blue') +
+  ggtitle("Distribucion de años de experiencia de los empleados") +
+  labs(y = 'Densidad', x = 'Experiencia (años)') +
+  theme(plot.title = element_text(size = 11, face = 'bold')) +
+  theme(axis.title = element_text(size = 10))
+
+p3 <- ggplot(salario, aes(x = Salary)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 10, fill = 'orange', alpha = 0.25) +
+  geom_density(col = 'orange') +
+  ggtitle("Distribucion de salario de los empleados") + 
+  labs(y = 'Densidad', x = 'Salario') +
+  theme(plot.title = element_text(size = 11, face = 'bold')) +
+  theme(axis.title = element_text(size = 10))
+
+
+wrap_plots(p1, p2, p3,
+           ncol = 1, nrow = 3,
+           widths = c(10, 10, 10), heights = c(5, 5, 5))
+```
+
+### Exploracion univariada(Cualitativa)
+
+Luego, se realiza la verificación y composición de las variables categóricas (Cualitativas)
+
+**Cantidad de empleados de acuerdo con su genero**
+
+```{r, echo = F}
+t <-  data.frame(Genero = levels(salario$Gender),
+                 Total = as.vector(table(salario$Gender)),
+                 F_relativa = as.vector(round(prop.table(table(salario$Gender)), 3)))
+t <- t[order(t$Total, decreasing = T), ]
+rownames(t) <- NULL
+t
+```
+
+```{r, fig.align='center', fig.width=10, fig.height=4 ,echo = F, cache = TRUE}
+p0<- ggplot(t, mapping = aes(x = '', y = F_relativa, fill = Genero)) +
+  geom_bar(stat= 'identity', color = 'white') +
+  coord_polar(theta = 'y') +
+  geom_text(aes(label = percent(F_relativa)), position = position_stack(vjust = 0.5)) +
+  theme_void()
+
+text<- "Parece que la base de datos se encuentra \nbalaceada si hablamos del genero de \nlos empleados, con una leve participacion \nmayor del genero masculino con un 54.8%"
+p0| textGrob(text, just = 'right', hjust = 0.5)
+
+```
+
+**Cantidad de empleados de acuerdo con su nivel educativo**
+
+```{r echo = F, cache = TRUE}
+levels(salario$Education.Level)[levels(salario$Education.Level)== 'PhD'] <- 'phD'
+levels(salario$Education.Level)[levels(salario$Education.Level)== "Bachelor's"] <- "Bachelor's Degree"
+levels(salario$Education.Level)[levels(salario$Education.Level)== "Master's"] <- "Master's Degree"
+levels(salario$Education.Level)[1] <- 'Other'
+  
+t1 <-  data.frame(nivel_educacion = levels(salario$Education.Level),
+                 Total = as.vector(table(salario$Education.Level)),
+                 F_relativa = as.vector(round(prop.table(table(salario$Education.Level)), 3)))
+t1 <- t1[order(t1$Total, decreasing = T), ]
+rownames(t1) <- NULL
+t1
+```
+
+```{r echo = F, fig.align='center', fig.width= 12, cache = TRUE}
+ggplot(salario, aes(x = Education.Level, fill = Education.Level)) +
+  geom_bar(alpha = 0.85) +
+  labs(x = 'Nivel educativo', y = 'Cantidad empleados') +
+  ylim(c(0, 3500)) +
+  geom_text(aes(label = after_stat(count)), stat = 'count', position = position_dodge(0.5), vjust = -0.5, size = 4)
+```
+
+La muestra cuenta con un total de 193 cargos diferentes asociados principalmente al desarrollo de software, análisis de datos, recursos humanos, marketing, y RH, de los cuales se muestran los mas recurrentes:
+
+```{r, echo= F, fig.align='center', fig.width=10, cache = TRUE}
+
+nube <- table(salario$Job.Title)
+wordcloud2(data = nube, size = 0.5, color = 'random-light')
+
+```
+
+### Exploracion multivariada
+
+```{r echo= F, fig.align='center', fig.width= 15, fig.height= 10, cache = TRUE}
+
+p4 <- ggplot(salario, aes(x= Age, y= Years.of.Experience)) + 
+  geom_point(aes(colour = Years.of.Experience >= 3 & Years.of.Experience <= 12), alpha = 0.2) +
+  geom_hline(yintercept = 2.9, linetype = 'dashed', col = 'black') +
+  geom_hline(yintercept = 12.1, linetype = 'dashed', col = 'black') +
+  geom_segment(x =  33, y = 15, xend =  45, yend = 28, color = 'red', arrow = arrow(), linewidth = 1.5) +
+  ggtitle("Edad y Experiencia de los empleados") +
+  labs(x = "Edad", y = "Experiencia(Años)", color = "IQR (Exper.)") +
+  theme(plot.title = element_text(size = 11, face = 'bold'),
+        axis.title = element_text(size = 10))
+
+p5<- ggplot(salario, aes(x= Age, y= Salary)) + 
+  geom_point(aes(colour = Salary >= 70000 & Salary <= 160000), alpha = 0.2) +
+  geom_hline(yintercept = 70000, linetype = 'dashed', col = 'black') +
+  geom_hline(yintercept = 160000, linetype = 'dashed', col = 'black') +
+  geom_curve(x = 38, y= 10000, xend = 50, yend = 110000, color = 'red', arrow = arrow(), 
+             linewidth = 1.5, curvature = -0.2) +
+  ggtitle("Edad y Salario de los empleados") + 
+  labs(x = 'Edad', y= 'Salario', color = 'IQR (Salario)') +
+  theme(plot.title = element_text(size = 11, face = 'bold'),
+        axis.title = element_text(size = 10))
+ 
+p6<- ggplot(salario, aes(x= Years.of.Experience, y= Salary)) + 
+  geom_point(aes(colour = Salary >= 70000 & Salary <= 160000), alpha = 0.2) +
+  geom_hline(yintercept = 70000, linetype = 'dashed', col ='black') +
+  geom_hline(yintercept = 160000, linetype = 'dashed', col = 'black') +
+  geom_curve(x = 12, y= 25000, xend = 20, yend = 100000, curvature =  -0.2, color= 'red', arrow = arrow(), linewidth = 1.5) +
+  ggtitle("Experiencia (Años) y Salario de los empleados") +
+  labs(x = 'Experiencia (Años)', y= 'Salario', color= 'IQR (Salario)') +
+  theme(plot.title = element_text(size = 11, face ='bold'),
+        axis.title = element_text(size = 10))
+
+#Diseño personalizado del plano
+#diseño <- "111222
+           #3333#"  
+
+#p6 + p4 + p5 +
+# plot_layout(design = diseño)
+
+(p6 | p4) / p5
+
+```
+
+Como se preveía, se observa como la experiencia y edad de los empleadas, pueden ser fuertes candidatas a explicar y aportar información para la predicción de salarios, al tener estas una relación visualmente directa y aunque se bien no es totalmente lineal en la fase de modelamiento podría contemplarse alguna transformación (logaritmo) para mejorar esta relación y entregar mucha mas información a los modelos de regresión, así mismo, y coherente con la realidad, una relación lineal y directa entre la variable de edad y experiencia profesional y aquí se observa como la mayoría de datos (IQR) se encuentran concentrados en personas mas jóvenes (sesgo de la muestra).
+
+**Distribución de variables en función del Genero**
+
+```{r echo=F, fig.height= 12, fig.width=12, cache = TRUE}
+p7<- ggplot(salario, aes(x= Gender, y= Age, fill= Gender, alpha = 0.9)) +
+  stat_boxplot(geom= 'errorbar', width = 0.25) +
+  geom_boxplot() +
+  ggtitle("Distribucion de edad por genero de los empleados") +
+  labs(y = 'Edad', x= 'Genero') +
+  theme(legend.position = 'none',
+        plot.title = element_text(size = 11, face = 'bold'),
+        axis.title = element_text(size= 10))
+
+p8<- ggplot(salario, aes(x= Education.Level, y= Age, fill= Education.Level, alpha= 0.9)) +
+  stat_boxplot(geom= 'errorbar', width= 0.25) +
+  geom_boxplot() +
+  ggtitle("Distribucion de edad por nivel de educacion") +
+  labs(y= 'Edad', x= 'Nivel de educacion') +
+  theme(legend.position= 'none',
+        plot.title = element_text(size= 11, face= 'bold'),
+        axis.title = element_text(size= 10))
+
+p9<- ggplot(salario, aes(x= Gender, y= Years.of.Experience, fill= Gender, alpha= 0.9)) +
+  stat_boxplot(geom= 'errorbar', width= 0.25) +
+  geom_boxplot() +
+  ggtitle("Distribucion de años de experiencia por genero de los empleados") +
+  labs(y= 'Experiencia (años)', x='Genero') +
+  theme(legend.position = 'none',
+        plot.title = element_text(size= 11, face= 'bold'),
+        axis.title = element_text(size= 10))
+
+p10<- ggplot(salario, aes(x= Education.Level, y= Years.of.Experience, fill= Education.Level, alpha= 0.9)) +
+  stat_boxplot(geom= 'errorbar', width= 0.25) +
+  geom_boxplot() +
+  ggtitle("Distribucion de años de experiencia por nivel de educacion") +
+  labs(y= 'Experiencia (asño)', x='Nivel de educacion') +
+  theme(legend.position = 'none',
+        plot.title = element_text(size= 11, face= 'bold'),
+        axis.title = element_text(size= 10))
+
+p11<- ggplot(salario, aes(x= Gender, y= Salary, fill= Gender, alpha= 0.9)) +
+  stat_boxplot(geom= 'errorbar', width= 0.25) +
+  geom_boxplot() +
+  ggtitle("Distribucion del salario por genero de los empleados") +
+  labs(y= 'Salario', x='Genero') +
+  theme(legend.position = 'none',
+        plot.title = element_text(size= 11, face= 'bold'),
+        axis.title = element_text(size= 10))
+
+p12<- ggplot(salario, aes(x= Education.Level, y= Salary, fill= Education.Level, alpha= 0.9)) +
+  stat_boxplot(geom= 'errorbar', width= 0.25) +
+  geom_boxplot() +
+  ggtitle("Distribucion del salario por nivel de educacion de los empleados") +
+  labs(y= 'Salario', x='Nivel de educacion') +
+  theme(legend.position = 'none',
+        plot.title = element_text(size= 11, face= 'bold'),
+        axis.title = element_text(size= 10))  
+
+salario_c <- salario
+salario_c$edad_c <- cut(salario_c$Age, breaks = c(0, 15, 30, 45, 60, 75), right = FALSE)
+salario_c$experiencia_c <- cut(salario_c$Years.of.Experience, breaks = c(0, 5, 10, 15, 20, 25, 30, 35), right = FALSE)
+salario_c$salario_c <- cut(salario_c$Salary, breaks = c(0, 25000, 50000, 75000, 100000, 125000, 150000, 175000, 200000),
+                           labels = c("(0,25.000]", "(25.000,50.000]", "(50.000,75.000]", "(75.000,100.000]", "(100.000,125.000]",
+                                      "(125.000,150.000]", "(150.000,175.000]", "(175.000,200.000]"))
+
+t2<- table(salario_c$edad_c, salario_c$Gender, deparse.level = 1, dnn = c("Rango edad", "Genero Empleado"))
+t3<- table(salario_c$experiencia_c, salario_c$Gender)
+t4<- table(salario_c$salario_c, salario$Gender)
+
+
+diseño<- "12
+          13
+          45
+          46
+          78
+          79
+          "
+
+
+text1 <- paste("Se distribuye la variable edad en rangos de 15 años cada uno,",
+             "en donde se observa una participacion igualada excepto en",
+             "edades superiores a los 45 años, asi mismo la participacion",
+             "mas concentrada de mujeres entre 28 y 37 años aprox, mientras",
+             "que para hombres este rango aumenta hasta los 40 años.", sep = "\n")
+
+text2 <- paste("Se distribuye la variable experiencia (años) en rangos de 5 años",
+             "cada uno, donde se observa -igual que en el caso anterior- una",
+             "mayor representacion de hombres con experiencia mayor de 15 años",
+             "mientras que para las mujeres su mediana se encuentra en 6 años ",
+             "aprox y casos atipicos con experiencias altas. (mayor 20 años)", sep = "\n")
+
+text3 <- paste("Se distribuye la variable salario en rangos de 25.000 $mes, ",
+             "aqui una participacion mucho mas equilibrada de los rangos para",
+             "cada uno de los generos", sep = "\n")
+
+p7 + tableGrob(t2, theme =  ttheme_minimal(base_size = 9, padding =  unit(c(2, 2), "mm"))) + textGrob(text1,just = 'centre',
+                                                                                                      x = 0.5, y= 0.6,
+                                                                                                      hjust = 0.5, vjust = 0.3) +
+  p9 + tableGrob(t3, theme = ttheme_minimal(base_size = 9, padding =  unit(c(2, 2), "mm"))) + textGrob(text2,
+                                                                                                       vjust = 0.3) +
+  p11+ tableGrob(t4, theme = ttheme_minimal(base_size = 9, padding =  unit(c(2, 2), "mm"))) + textGrob(text3,
+                                                                                                       vjust = -0.5) +
+  plot_layout(design = diseño)
+
+```
+
+**Distribución de variables en función del Nivel educativo**
+
+```{r echo=F, fig.height= 12, fig.width=12, cache = TRUE}
+
+t5<- table(salario_c$edad_c, salario_c$Education.Level, deparse.level = 1, dnn = c("Rango edad", "Nivel de educacion"))
+t6<- table(salario_c$experiencia_c, salario_c$Education.Level)
+t7<- table(salario_c$salario_c, salario$Education.Level)
+
+
+text4 <- paste("Se observa como el nivel academico depende de la edad",
+             "(rquisitos) en la medida que aumenta el titutlo academico",
+             "La unica variable que parece tener una presencia importante de",
+             "outlieras es la de \`licenciatura`", sep = "\n")
+
+text5 <- paste("La experiencia parece tambien estar relacionada con el nivel",
+             "educactivo, a mayor experiencia, mayor es el titulo que tienen",
+             "los empleados.", sep = "\n")
+
+text6 <- paste("Finalmente, el salario (Variable a predecir) muestra importantes",
+             "diferencias en funcion del nivel educativo del empleado,", sep = "\n")
+
+p8 + tableGrob(t5, theme =  ttheme_minimal(base_size = 9, padding =  unit(c(2, 2), "mm"))) + textGrob(text4,
+                                                                                                      vjust = 0.3) +
+  p10 + tableGrob(t6, theme = ttheme_minimal(base_size = 9, padding =  unit(c(2, 2), "mm"))) + textGrob(text5,
+                                                                                                       vjust = 0.3) +
+  p12+ tableGrob(t7, theme = ttheme_minimal(base_size = 9, padding =  unit(c(2, 2), "mm"))) + textGrob(text6,
+                                                                                                       vjust = -0.5) +
+  plot_layout(design = diseño)
+
+```
+
+### Analisis de correlacion
+
+Se ejecuta análisis de correlación entre las variables cuantitativas, con el objetivo de identificar posibles variables no explicativas, sin embargo y aunque en relación a la variable `salario` los años de experiencia tienen una correlación de 0.8 lo que podría afectar el modela-miento, se deja como susceptible de eliminación durante dicha fase.
+
+```{r, fig.align='center', fig.width=11, cache=TRUE, echo=F}
+ggpairs(salario,
+        columns = c(1, 5, 6),
+        aes(color = Gender, alpha = 0.005))
+```
+
+## Preparacion de datos
+
+Dado que desde la fuente los datos tienen una muy buena calidad, y los pocos faltantes se completaron a través de la media, no se ejecutara ninguna acción durante el proceso de limpieza de datos.
+
+Únicamente se divide el salario entre 1000 para manejar el dato en miles de USD
+
+Se garantiza que las variables categóricas se encuentren como factor (para que el modelo las convierta a dummies y elimine una para evitar problemas de multicolinealidad).
+
+Se generan los conjuntos de entrenamiento y test.
+
+```{r cache = TRUE}
+set.seed(42)
+
+salario_f<- salario
+names(salario_f)<- c("Age", "Gender", "Education.Level", ".", "Years.of.Experience", "Salary")
+head(salario_f)
+salario_f<- dummy_cols(salario_f, select_columns = c("Gender", "Education.Level", "."), remove_first_dummy = TRUE)
+salario_f<- salario_f[,c(-2, -3, -4)]
+
+sample<- sample.int(nrow(salario_f), floor(.8*nrow(salario_f)))
+salario_train <- salario_f[sample,]
+salario_test<- salario_f[-sample,]
+salario_train$Salary<- sapply(salario_train$Salary, FUN = function(x){x/1000})
+salario_test$Salary<- sapply(salario_test$Salary, FUN = function(x){x/1000})
+
+```
+
+## Modelamiento
+
+Un primer modelo a probar sera la `regresión lineal` para predecir el salario en función las variables `Age` y `Years of experience` que tenían una correlación interesante, durante el procesos descriptivo.
+
+```{r cache = TRUE}
+#creacion de modelo basico
+regresion0 <- lm(Salary~Age + Years.of.Experience, data = salario_train)
+summary(regresion0)
+```
+
+El modelo con las variables seleccionadas (Edad, años de experiencia) como predictores del salario, logran obtener un $R^2 = 0.66$ es decir, que logra recoger un 66% de variabilidad de los datos. Así mismo el `p-value` es significativo por lo que es posible rechazar la hipótesis nula y afirmar que los resultados del modelo no son causados por el azar, finalmente, las dos variables predictoras tienen coeficientes significativos lo que indican que están aportando información al modelo.
+
+Dados los resultados su interpretación es:
+
+$$Salario = 101.720 + (Edad)\cdot-1.8 + (Experiencia)\cdot9.23$$ La base son 101.720 USD y por cada año de edad que tenga la persona se restaran 1.80 USD y se sumaran 9.23 USD por cada año de experiencia con la que cuenta.
+
+Finalmente el modelo aunque no es explicado por el azar tiene un error residual alto $(\pm 30.730 \ USD)$ y esa variabilidad quizá se podrá explicar con el resto de variables que aun no fueron incluidas para su entrenamiento, y con las cuales se experimentara en siguientes ejercicios.
+
+Dado que es un modelo entrenado a partir de dos variables cuantitativas, es posible representarlo de manera tridimensional, (esto ya no sera posible en futuros ejercicios dado que no existen herramientas para representar mas de 3D)
+
+```{r fig.align='center', cache= TRUE, echo = FALSE}
+s3d<- scatterplot3d(x= salario_train$Age, y= salario_train$Years.of.Experience, z= salario_train$Salary, pch = 16,
+                    cex.lab = 1, 
+                    main = 'Distribucion de variables en plano \ntridimensional (Edad - experiencia - Salario)',
+                    xlab = 'Edad', ylab = 'Experiencia(Anios)', zlab = 'Salario (miles USD)', highlight.3d = TRUE)
+
+s3d$plane3d(regresion0, lty.box = 'solid', col = 'mediumblue')
+
+
+```
+
+Cada uno de los puntos representa la ubicación de cada una de las observaciones en el plano tridimensional, mientras que el plano (azul) representa el plano de regresión creado por el modelo a través de las variables predictoras.
+
+Una premisa inicial es la explicabilidad por separado de las variables edad y experiencia, sin embargo en el gráfico se puede observar como se sobrevalora el salario, cuando un empleado tiene un valor alto en una de las variables predictoras y bajo en la otra, este comportamiento puede sugerir que existe interacción entre estas dos variables, por lo que es posible agregar este nuevo enfoque al modelo.
+
+```{r cache=TRUE}
+regresion1 <- lm(Salary~Age + Years.of.Experience + Age:Years.of.Experience, data = salario_train)
+summary(regresion1)
+```
+
+Con esta adición el $R^2$ del modelo aumento a 0.72 mientras que el error residual bajo a \$27.910 USD (Igualmente continua siendo alto), en futuros modelos se incluirán el resto de variables para intentar explicar esta variabilidad.
+
+$$Salario = 25.365 + (0.48 + (-0.24)\cdot (Experiencia))\cdot (Edad) + (Experiencia)\cdot 18.85$$ 
+
+**Regresión con la inclusión del dataset completo**
+
+Se entrena modelo de regresión con el total de las variables
+
+```{r cache = TRUE}
+options(max.print = 150)
+regresion2<- lm(Salary~., data = salario_train)
+summary(regresion2)
+```
+
+El modelo con el totalidad de variables aumenta su $R^2= 0.83$ lo que quiere decir que puede explicar el 83% de variabilidad en los datos, con un error residual estándar de $\pm 21.340 USD$ y un p-valué significativo y aunque los resultados mejoraron bastante respecto al modelo básico inicial, existen muchas variables sin significancia por lo que habría que aplicar `Feacture selection` con el objetivo de continuar mejorando los resultados de entrenamiento.
+
+```{r fig.align='center', fig.height= 7, fig.width= 10, warning=F, echo= F, cache= TRUE}
+layout(matrix(c(1,2,3,4),2,2))
+plot(regresion2)
+```
+
+En la revisión de los residuos frente a las predicciones (gráficos primera fila) se observa un leve tendencia alta de residuos para predicciones altas, lo que podría ser un signo de no homocedasticidad.
+
+La verificación Q-Q que compara los residuos contra la curva normal muestra algunos valores atípicos que pueden indicar que el modelo no cumple el supuesto de normalidad.
+
+Dado que el p-value > 0.05 no se rechaza la hipótesis nula y por tanto no se sospecha de autocorrelacion en los residuos.
+
+```{r echo= FALSE, warning=FALSE, cache= TRUE}
+# Medición del error en datos de test
+
+pred0<-predict(regresion0, salario_test, se.fit=TRUE)
+RMSE0<-sqrt(mean((pred0$fit-salario_test$Salary)^2))
+
+pred1<-predict(regresion1, salario_test, se.fit=TRUE)
+RMSE1<-sqrt(mean((pred1$fit-salario_test$Salary)^2))
+
+
+pred2<-predict(regresion2, salario_test, se.fit=TRUE)
+RMSE2<-sqrt(mean((pred2$fit-salario_test$Salary)^2))
+
+```
+A continuación la evaluación de los 3 primeros modelos generados frente a los datos de test (Datos que son nuevos para cada modelo) a través de la métrica $RMSE$ (Raíz del error cuadrático medio) bajo esta medición, el mejor modelo sera aquel que obtenga un valor menor.
+
+1. ***Modelo 1***: `r round(RMSE0, 2)`
+2. ***Modelo 2***: `r round(RMSE1, 2)`
+3. ***Modelo 3***: `r round(RMSE2, 2)`
+
+Como se esperaba el mejor modelo hasta el momento es el que incluye la totalidad de variables del dataset, sin embargo aun es posible mejorarlo a través de diferentes técnicas que se abordaran mas adelante.
+
+A continuación se muestra gráficamente el comportamiento de los residuos tanto en los datos de entrenamiento como de test, donde se observa de manera visual la ausencia de overfiting.
+
+```{r echo=FALSE, fig.align='center', warning=FALSE, cache=TRUE}
+y_train_pred <- predict(regresion2, salario_train, se.fit=TRUE)
+train<- data.frame(y_train_pred = y_train_pred$fit,
+                   y_train = salario_train$Salary)
+train$residuo <- train$y_train_pred - train$y_train
+
+test<- data.frame(y_test_pred = pred2$fit,
+                  y_test = salario_test$Salary)
+test$residuo<- test$y_test_pred - test$y_test
+                  
+ggplot() +
+  geom_point(data = train, aes(x= y_train_pred, y= residuo), shape = 16, col = 'red', alpha = 0.2) +
+  geom_point(data = test, aes(x=y_test_pred, y= residuo), shape =16, col = 'blue', alpha = 0.2) +
+  geom_hline(yintercept = 0, linewidth = 1) + 
+  ggtitle("Residuos y predicciones - Regresion Lineal") +
+  theme(legend.position = "left", plot.title = element_text(size= 11, face= 'bold'),
+        axis.title = element_text(size = 10)) +
+  labs(x= 'Prediccion (miles USD)', y= 'Residuo (miles USD)') +
+  geom_label(aes(x= 25, y= -60, label = "Test data"), stat = 'unique', size = 4, color = 'blue', fill = 'gray') +
+  geom_label(aes(x= 25, y= -74, label = "Train data"), stat = 'unique', size = 4, color = 'red', fill = 'gray') 
+  
+```
+$$Residuo = Prediccion - valor\ real$$
+**Aplicar técnicas de feacture selection**
+
+```{r cache = TRUE, results='hide'}
+regresion_step<- step(regresion2, direction = "both")
+```
+
+```{r}
+summary(regresion_step)
+```
+
+Se ejecuta un modelo stepwise, que aunque tiene resultados muy similares al modelo con el dataset completo, se gana en parsimonia (Mismos resultados con muchas menor variables requeridas.)
+
+En la revisión de los supuestos de normalidad, se observan algunos atipicos con gran influencia lo que podria estar afectando los resultados del modelo.
+
+```{r fig.align='center', fig.height= 7, fig.width= 10, warning=F, echo= F, cache= TRUE}
+layout(matrix(c(1,2,3,4),2,2))
+plot(regresion_step)
+```
+
+El siguiente algoritmo a experimentar es una SVM para regresión, y para este se realiza un ajuste adicional sobre los datos y es comenzar a tratar la variable `education level` como un factor ordenado.
+
+```{r}
+set.seed(42)
+
+salario_f<- salario
+names(salario_f)<- c("Age", "Gender", "Education.Level", ".", "Years.of.Experience", "Salary")
+salario_f$Education.Level <- ordered(salario_f$Education.Level, levels= c("Other", "High School", "Bachelor's Degree",
+                                                                          "Master's Degree", "phD"),
+                                     labels= c(0, 1, 2, 3, 4))
+salario_f<- dummy_cols(salario_f, select_columns = c("Gender", "."), remove_first_dummy = TRUE)
+salario_f<- salario_f[,c(-2, -3, -4)]
+sample<- sample.int(nrow(salario_f), floor(.8*nrow(salario_f)))
+salario_train <- salario_f[sample,]
+salario_test<- salario_f[-sample,]
+salario_train$Salary<- sapply(salario_train$Salary, FUN = function(x){x/1000})
+salario_test$Salary<- sapply(salario_test$Salary, FUN = function(x){x/1000})
+
+```
+
+```{r cache= TRUE, warning=F}
+regression_svr = svm(formula = Salary ~ ., 
+                 data = salario_train, 
+                 type = "eps-regression", 
+                 kernel = "poly")
+
+pred3<-predict(regression_svr, salario_test)
+RMSE3<-sqrt(mean((pred3 - salario_test$Salary)^2))
+```
+Se ejecuta un modelo de vectores de maquina de soporte con un kernel `polinomico` sin ajustes de hiperparametros y se obtiene inicialmente un resultado un poco peor al mejor conseguido a través de la regresión lineal.
+
+4. ***Modelo - SVR***: `r round(RMSE3, 2)`
+
+
+```{r echo= FALSE, cache= TRUE}
+y_train_pred <- predict(regression_svr, salario_train, se.fit=TRUE)
+train<- data.frame(y_train_pred = y_train_pred,
+                   y_train = salario_train$Salary)
+train$residuo <- train$y_train_pred - train$y_train
+
+test<- data.frame(y_test_pred = pred3,
+                  y_test = salario_test$Salary)
+test$residuo<- test$y_test_pred - test$y_test
+                  
+ggplot() +
+  geom_point(data = train, aes(x= y_train_pred, y= residuo), shape = 16, col = 'red', alpha = 0.2) +
+  geom_point(data = test, aes(x=y_test_pred, y= residuo), shape =16, col = 'blue', alpha = 0.2) +
+  geom_hline(yintercept = 0, linewidth = 1) + 
+  ggtitle("Residuos y predicciones") +
+  theme(legend.position = "left", plot.title = element_text(size= 11, face= 'bold'),
+        axis.title = element_text(size = 10)) +
+  labs(x= 'Prediccion (miles USD)', y= 'Residuo (miles USD)') +
+  geom_label(aes(x= 25, y= -60, label = "Test data"), stat = 'unique', size = 4, color = 'blue', fill = 'gray') +
+  geom_label(aes(x= 25, y= -74, label = "Train data"), stat = 'unique', size = 4, color = 'red', fill = 'gray') 
+```
+
+La revisión de los residuos entre los conjuntos de datos no indican algún tipo de `overfiting` sin embargo se observa una gran dispersión entre las predicciones y los valores reales.
+
+
+Como segunda instancia se busca ajustar los hiperparametros de regularización a través de la validación cruzada, donde en el gráfico a continuación se pueden observar los mejores resultados identificando el punto mas caliente. 
+
+```{r cache= TRUE, results='hide', warning=FALSE, echo= F}
+regresion_svr_tune<- tune(svm, Salary ~., data = salario_train,
+                          ranges = list(epsilon = seq(4.4, 5.9, 0.3), cost = 2^(seq(14.7,15.1,0.1))))
+```
+
+```{r cache= T, echo= F}
+plot(regresion_svr_tune)
+```
+
+Identificar el valor exacto en el grafico no es tan sencillo, asi que se muestran a continuacion y seran los valores con los que se ejecute un nuevo modelo de regresion - SVR.
+
+***Mejor epsilon***: `r regresion_svr_tune$best.model$epsilon`
+***Mejor costo***: `r regresion_svr_tune$best.model$cost`
+
+```{r cache = T, warning=F}
+regression_svr = svm(formula = Salary ~ ., 
+                 data = salario_train, 
+                 type = "eps-regression", epsilon = 5.6, cost = 32768)
+
+pred4<-predict(regression_svr, salario_test)
+RMSE4<-sqrt(mean((pred4 - salario_test$Salary)^2))
+```
+5. ***Modelo - SVR***: `r round(RMSE4, 2)`
+
+```{r cache = T, echo= F}
+
+y_train_pred <- predict(regression_svr, salario_train, se.fit=TRUE)
+train<- data.frame(y_train_pred = y_train_pred,
+                   y_train = salario_train$Salary)
+train$residuo <- train$y_train_pred - train$y_train
+
+test<- data.frame(y_test_pred = pred4,
+                  y_test = salario_test$Salary)
+test$residuo<- test$y_test_pred - test$y_test
+                  
+ggplot() +
+  geom_point(data = train, aes(x= y_train_pred, y= residuo), shape = 16, col = 'red', alpha = 0.2) +
+  geom_point(data = test, aes(x=y_test_pred, y= residuo), shape =16, col = 'blue', alpha = 0.2) +
+  geom_hline(yintercept = 0, linewidth = 1) + 
+  ggtitle("Residuos y predicciones - SVR ") +
+  theme(legend.position = "left", plot.title = element_text(size= 11, face= 'bold'),
+        axis.title = element_text(size = 10)) +
+  labs(x= 'Prediccion (miles USD)', y= 'Residuo (miles USD)') +
+  geom_label(aes(x= 25, y= -60, label = "Test data"), stat = 'unique', size = 4, color = 'blue', fill = 'gray') +
+  geom_label(aes(x= 25, y= -74, label = "Train data"), stat = 'unique', size = 4, color = 'red', fill = 'gray') 
+
+```
+Aunque la maquina de vectores de soporte dio unos buenos resultados, vamos a experimentar con un par de modelos adicionales, buscando mejorar un poco mas los resultados.
+
+En primera instancia se utilizan los arboles de decisión, según se muestra a continuación:
+
+```{r cache=T}
+regresion_ad<- rpart(formula= salario_train$Salary ~ ., data= salario_train)
+rpart.plot(regresion_ad)
+```
+Parecen primar la variable de experiencia y algunos puestos en los cortes realizados por el árbol para clasificar el salario, y aunque su corte es discreto, veamos como se comporta el error medio de prediccion:
+
+
+```{r echo=FALSE, cache= TRUE}
+pred5<-predict(regresion_ad, salario_test)
+RMSE5<-sqrt(mean((pred5 - salario_test$Salary)^2))
+```
+
+6. ***Modelo - Árbol de decisión***: `r round(RMSE5, 2)`
+
+Resulta en un error bastante alto, quizá no se logra capturar de manera correcta la variabilidad de los datos, pero y si en vez de 1 solo árbol, tal vez unimos 150?
+
+```{r cache= T}
+regresion_rf<- randomForest(x= salario_train[,-3], y = salario_train$Salary, ntree= 150,
+                            keep.forest= TRUE, importance= TRUE)
+```
+
+```{r echo= FALSE, cache= TRUE}
+regresion_rf
+```
+```{r echo= F, cache= TRUE}
+pred6<- predict(regresion_rf, newdata = salario_test)
+RMSE6<-sqrt(mean((pred6 - salario_test$Salary)^2))
+```
+Se ejecuta un modelo de Random Forest de 150 arboles aleatorios, que consiguen explicar el 96% de variabilidad en los datos, veamos su comportamiento de prediccion en los datos de test:
+
+7. ***Modelo - random forest***: `r round(RMSE6, 2)`
+
+Hemos conseguido el **mejor** resultado hasta ahora logrando disminuir cerca de 2mil USD de error promedio en la predicción respecto a lo conseguido con el modelo de SVM.
+
+```{r cache=TRUE, echo=FALSE}
+plot(regresion_rf)
+```
+
+```{r cache=TRUE, echo=FALSE}
+y_train_pred <- predict(regresion_rf, salario_train, se.fit=TRUE)
+train<- data.frame(y_train_pred = y_train_pred,
+                   y_train = salario_train$Salary)
+train$residuo <- train$y_train_pred - train$y_train
+
+test<- data.frame(y_test_pred = pred6,
+                  y_test = salario_test$Salary)
+test$residuo<- test$y_test_pred - test$y_test
+                  
+ggplot() +
+  geom_point(data = train, aes(x= y_train_pred, y= residuo), shape = 16, col = 'red', alpha = 0.2) +
+  geom_point(data = test, aes(x=y_test_pred, y= residuo), shape =16, col = 'blue', alpha = 0.2) +
+  geom_hline(yintercept = 0, linewidth = 1) + 
+  ggtitle("Residuos y predicciones - Random Forest ") +
+  theme(legend.position = "left", plot.title = element_text(size= 11, face= 'bold'),
+        axis.title = element_text(size = 10)) +
+  labs(x= 'Prediccion (miles USD)', y= 'Residuo (miles USD)') +
+  geom_label(aes(x= 25, y= -60, label = "Test data"), stat = 'unique', size = 4, color = 'blue', fill = 'gray') +
+  geom_label(aes(x= 25, y= -74, label = "Train data"), stat = 'unique', size = 4, color = 'red', fill = 'gray') 
+```
+
+```{r fig.height= 10, fig.width= 8, cache=TRUE, echo= FALSE}
+
+ImpData <- as.data.frame(importance(regresion_rf))
+ImpData$Var.Names <- row.names(ImpData)
+ImpData <- ImpData[order(ImpData$`%IncMSE`, decreasing = T), ]
+
+ggplot(ImpData[c(1:30),], aes(x=Var.Names, y=`%IncMSE`)) +
+  geom_segment( aes(x=Var.Names, xend=Var.Names, y=0, yend=`%IncMSE`), color="skyblue") +
+  geom_point(aes(size = IncNodePurity), color="blue", alpha=0.6) +
+  theme_light() +
+  coord_flip() +
+  theme(
+    legend.position="bottom",
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+```
+
+Observando la importancia de las mejores 30 variables, vemos como la edad y los años de experiencia son aquellas que contribuyen en promedio a la mejora de RMSE en la predicción en cada uno de los arboles aleatorios.
+
+Durante el análisis descriptivo se presumía que el nivel educativo tendrá relevancia en la predicción de salarios, sin embargo vemos como resultan ser mas importantes otras variables. (por lo menos para este modelo.)
+
+## Resumen
+
+| Modelo                             | RMSE               |
+|:-----------------------------------|:-------------------|
+| Regresión  lineal de 2 variables   |`r round(RMSE0, 2)` |
+| Regresión linea 2 var. relacionadas|`r round(RMSE1, 2)` |
+| Regresión lineal dataset total     |`r round(RMSE2, 2)` |
+| SVM                                |`r round(RMSE3, 2)` |
+| SVM sintonizado                    |`r round(RMSE4, 2)` |
+| Árbol de desicion                  |`r round(RMSE5, 2)` |
+| Random forest                      |`r round(RMSE6, 2)` |
+
+
+Veamos el comportamiento de predicción sobre cada uno de los salarios reales de test (registros únicos, para evitar problemas en la visualización)
+
+```{r echo= FALSE}
+salary_f<- data.frame(Salary= salario_test$Salary,
+                      Predict= pred6)
+salary_f<- salary_f[order(salary_f$Salary), ]
+salary_f<- salary_f[!duplicated(salary_f$Salary), ]
+rownames(salary_f) <- NULL 
+salary_f$num<- c(1:189)
+
+ggplot() +
+  geom_line(aes(x= num, y= Salary), data= salary_f, col= 'blue') +
+  geom_line(aes(x= num, y= Predict), data= salary_f, col= 'red') +
+  geom_label(aes(x= 15, y= 225, label = "Salarios reales"), stat = 'unique', size = 4, color = 'blue', fill = 'gray') +
+  geom_label(aes(x= 20, y= 200, label = "Salarios (prediccion)"), stat = 'unique', size = 4, color = 'red', fill = 'gray') 
+```
+
+Pues bien, vemos como la predicción se acerca bastante a los salarios reales, podríamos intentar mejorar mas los resultados reales a través de la sintonizador de hiperparametros con validación cruzada, sin embargo esto se deja a gusto de los lectores que deseen experimentar mas.
+
+En cuanto a técnicas y modelos de machine learning el ejercicio finaliza acá, sin embargo, no se descarta en el futuro aplicar redes neuronales y deep learning para ver sus resultados hacia este problema.
+
+Muchas gracias.
+
+
+
+
+
+
